@@ -8,7 +8,7 @@
         "All elements of each target module will get arranged around their same root element as in the source layout."
         "<p>"
         "<author>Author: Jens Kolbenschlag, jens.software@gmail.com</author><br/>"
-        "Inspired by the similar <a href=\"https://github.com/MitjaNemec/Kicad_action_plugins\">replicate_layout</a> script made by Mitja Nemec for KiCad.",
+        "Inspired by the similar <a href=\"https://github.com/MitjaNemec/Kicad_action_plugins#replicate-layout\">replicate_layout</a> script made by Mitja Nemec for KiCad.",
     "de: <b>Replicate Layout</b> "
         "<p>"
         "Reproduziert die Bauteil-Anordnung eines Moduls.\n"
@@ -18,7 +18,7 @@
         "Alle Elemente aller Ziel-Module werden genauso um deren selbes Ursprungs-Element angeordnet wie im Quell-Layout."
         "<p>"
         "<author>Autor: Jens Kolbenschlag, jens.software@gmail.com</author><br/>"
-        "Inspiriert durch das ähnliche <a href=\"https://github.com/MitjaNemec/Kicad_action_plugins\">replicate_layout</a> Skript, entwickelt von Mitja Nemec für KiCad."
+        "Inspiriert durch das ähnliche <a href=\"https://github.com/MitjaNemec/Kicad_action_plugins#replicate-layout\">replicate_layout</a> Skript, entwickelt von Mitja Nemec für KiCad."
 
 
 // ====== INTERNATIONALIZATION ====== //
