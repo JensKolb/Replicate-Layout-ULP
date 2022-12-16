@@ -1,0 +1,478 @@
+#usage ""
+    "en: <b>Replicate Layout</b> "
+        "<p>"
+        "Replicates the PCB layout of a module.\n"
+        "<p>"
+        "Usage: Select one element with the 'Group' tool, then run the replicate_layout.ulp file. "
+        "The selected 'root' element will be the anchor point of the source layout. "
+        "All elements of each target module will get arranged around their same root element as in the source layout."
+        "<p>"
+        "<author>Author: Jens Kolbenschlag, jens.software@gmail.com</author><br/>"
+        "Inspired by the similar <a href=\"https://github.com/MitjaNemec/Kicad_action_plugins\">replicate_layout</a> script made by Mitja Nemec for KiCad.",
+    "de: <b>Replicate Layout</b> "
+        "<p>"
+        "Reproduziert die Bauteil-Anordnung eines Moduls.\n"
+        "<p>"
+        "Nutzung: Wählen Sie ein Element mit 'Group'-Werkzeug aus, und führen Sie dann die replicate_layout.ulp Datei aus. "
+        "Das ausgewählte 'Ursprungs'-Element wird als Ankerpunkt für das zu kopierende Quell-Layout verwendet. "
+        "Alle Elemente aller Ziel-Module werden genauso um deren selbes Ursprungs-Element angeordnet wie im Quell-Layout."
+        "<p>"
+        "<author>Autor: Jens Kolbenschlag, jens.software@gmail.com</author><br/>"
+        "Inspiriert durch das ähnliche <a href=\"https://github.com/MitjaNemec/Kicad_action_plugins\">replicate_layout</a> Skript, entwickelt von Mitja Nemec für KiCad."
+
+
+// ====== INTERNATIONALIZATION ====== //
+
+string TEXTS[] = {
+    "NO\v"
+    "en\v"
+    "de\v"
+    ,
+    "ERROR_MULTIPLE_SELECTED\v"
+    ":Error: More than one root element selected!\nPlease select only one element.\v"
+    ":Fehler: Es wurde mehr als ein Element ausgewählt!\nBitte wählen Sie nur ein Element aus.\v"
+    ,
+    "ERROR_NO_MODULE\v"
+    ":Error: Selected element is not part of a module.\v"
+    ":Fehler: Das gewählte Element ist nicht Teil eines Moduls.\v"
+    ,
+    "ERROR_NONE_SELECTED\v"
+    ":Error: No root element selected!\nPlease select a root element with the 'Group'-tool.\v"
+    ":Fehler: Es wurde kein Element ausgewählt!\nBitte wählen Sie ein Ursprungs-Element mit dem 'Group'-Werkzeug.\v"
+    ,
+    "LBL_H_ROOT\v"
+    "Source root element:\v"
+    "Ursprungs-Element:\v"
+    ,
+    "LBL_T_SOURCE\v"
+    "Select the module that includes all elements of the source layout.\v"
+    "Wählen Sie das Modul aus, das alle Elemente beinhaltet, welche das zu kopierende Layouts bilden.\v"
+    ,
+    "LBL_H_SOURCE\v"
+    "Source module:\v"
+    "Quell-Modul:\v"
+    ,
+    "LBL_T_TARGET\v"
+    "Select all target modules to which the source layout should be copied.\v"
+    "Wählen Sie alle Ziel-Module aus, auf welche das Layout des Quell-Moduls angewandt werden soll.\v"
+    ,
+    "LBL_H_UNSELECTED\v"
+    "Available unselected modules:\v"
+    "Verfügbare Module:\v"
+    ,
+    "LBL_H_SELECTED\v"
+    "Selected target modules:\v"
+    "Ausgewählte Ziel-Module:\v"
+    ,
+    "BTN_GO\v"
+    "Go!\v"
+    "Los!\v"
+    ,
+    "ERROR_NO_TARGETS\v"
+    ";No target module was selected!\nPlease move at least one target module to the \"Selected targed modules\" list.\v"
+    ";Keine Ziel-Module ausgewählt!\nBitte verschieben Sie mindestens ein Modul in die \"Ausgewählte Ziel-Module\"-Liste.\v"
+};
+
+int languageIndex = strstr(TEXTS[0], language());
+if (languageIndex < 0 ) {
+    languageIndex = 1;
+} else {
+    languageIndex /= 3;
+}
+string tr(string identifier)
+{
+    // get text for given identifier
+    string text = lookup(TEXTS, identifier, languageIndex, '\v');
+    if (!text) {
+        // no translation available => get english text
+        text = lookup(TEXTS, identifier, 1, '\v');
+    }
+
+    // if no text was found return identifier
+    return text ? text : identifier;
+}
+
+
+// ====== HELPER FUNCTIONS ====== //
+
+// convert from internal to input units
+int gridUnit;
+board(B) {
+    gridUnit = B.grid.unitdist;
+}
+real u2real(int u) {
+    switch(gridUnit) {
+        case GRID_UNIT_MIC: 
+            return u2mic(u);
+        case GRID_UNIT_MM: 
+            return u2mm(u);
+        case GRID_UNIT_MIL: 
+            return u2mil(u);
+        case GRID_UNIT_INCH: 
+            return u2inch(u);
+        default:
+            return 0.0;
+    }
+}
+
+// get element name without modules
+string getCoreName(string fullName) {
+    int colonPos = strrchr(fullName, ':');
+    if (colonPos < 0) {
+        return fullName;
+    }
+    return strsub(fullName, colonPos + 1);
+}
+
+// check if both elements are the same element of different module instances
+int isElementEquivalent(UL_ELEMENT elementA, UL_ELEMENT elementB, string nameA, string nameB) {
+    if (nameA == "") {
+        nameA = getCoreName(elementA.name);
+    }
+    if (nameB == "") {
+        nameB = getCoreName(elementB.name);
+    }
+
+    return (nameA == nameB 
+            && elementA.package.library == elementB.package.library
+            && elementA.package.name == elementB.package.name
+            && elementA.value == elementB.value
+    );
+}
+
+
+// ====== PREPARE DIALOG ====== //
+
+string buffer;
+
+UL_ELEMENT sourceRootElement;
+string sourceModuleName = "";
+
+// list of modules that have a similar root element
+string candidateModuleNames[];
+UL_ELEMENT candidateModuleRoots[];
+int nCandidates = 0;
+
+int getCandidateIndex(string newModuleName) {
+    for (int i = 0; i < nCandidates; i++) {
+        if (newModuleName == candidateModuleNames[i]) {
+            return i;
+        }
+    }
+    return nCandidates - 1;
+}
+
+// list of possible module levels for the source module
+string sourceModuleCandidates[];
+int nSourceModuleCandidates = 0;
+
+board(B) {
+    // find selected root element
+    int rootFound = 0;
+    B.elements(E) {
+        if (ingroup(E) > 0) {
+            if (rootFound) {
+                dlgMessageBox(tr("ERROR_MULTIPLE_SELECTED"));
+                exit(-1);
+            }
+
+            sourceRootElement = E;
+            rootFound = 1;
+
+            string nameParts[];
+            int numberOfNameParts = strsplit(nameParts, E.name, ':');
+            if (numberOfNameParts < 2) {
+                dlgMessageBox(tr("ERROR_NO_MODULE"));
+                exit(-1);
+            }
+
+            string moduleName = "";
+            for (int level = 0; level < numberOfNameParts - 1; level++) {
+                moduleName = moduleName + nameParts[level] + ":";
+
+                sourceModuleCandidates[nSourceModuleCandidates++] = moduleName;
+            }
+        }
+    }
+
+    if (!rootFound) {
+        dlgMessageBox(tr("ERROR_NONE_SELECTED"));
+        exit(-1);
+    }
+
+    // find modules with matching root elements
+    string rootCoreName = getCoreName(sourceRootElement.name);
+    B.elements(E) {
+        if (E.name != sourceRootElement.name) {   // we don't want to include the root element again
+
+            string nameParts[];
+            int numberOfNameParts = strsplit(nameParts, E.name, ':');
+            if (numberOfNameParts > 1) {
+                string elementName = nameParts[numberOfNameParts - 1];
+
+                if (isElementEquivalent(sourceRootElement, E, rootCoreName, elementName)) {
+                    // root matching root element found => register all its module levels
+                    // e.g. for MODULE_A:MODULE_B:DEVICE_X register MODULE_A and MODULE_A:MODULE_B
+                    string moduleName = "";
+                    for (int level = 0; level < numberOfNameParts - 1; level++) {
+                        moduleName = moduleName + nameParts[level] + ":";
+
+                        candidateModuleNames[nCandidates] = moduleName;
+                        candidateModuleRoots[nCandidates] = E;
+                        nCandidates++;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ====== DIALOG ====== //
+
+string modulesSelected[];
+int nModulesSelected = 0;
+string modulesUnselected[];
+int nModulesUnselected = 0;
+
+void unselectAll() {
+    for (int i = 0; i < nModulesSelected; i++) {
+        modulesSelected[i] = "";
+    }
+    nModulesSelected = 0;
+
+    nModulesUnselected = nCandidates;
+    for (i = 0; i < nCandidates; i++) {
+        modulesUnselected[i] = candidateModuleNames[i];
+    }
+}
+
+void selectAll() {
+    for (int i = 0; i < nModulesUnselected; i++) {
+        modulesUnselected[i] = "";
+    }
+    nModulesUnselected = 0;
+
+    nModulesSelected = nCandidates;
+    for (i = 0; i < nCandidates; i++) {
+        modulesSelected[i] = candidateModuleNames[i];
+    }
+}
+
+void addToSelection(int selectedIndex) {
+    // copy selected entry
+    modulesSelected[nModulesSelected++] = modulesUnselected[selectedIndex];
+    sort(nModulesSelected, modulesSelected);
+
+    // remove selected entry from unselected list
+    nModulesUnselected--;
+    for (int i = selectedIndex; i < nModulesUnselected; i++) {
+        modulesUnselected[i] = modulesUnselected[i + 1];
+    }
+    modulesUnselected[nModulesUnselected] = "";
+
+}
+
+void removeFromSelection(int selectedIndex) {
+    // copy selected entry
+    modulesUnselected[nModulesUnselected++] = modulesSelected[selectedIndex];
+    sort(nModulesUnselected, modulesUnselected);
+
+    // remove selected entry from unselected list
+    nModulesSelected--;
+    for (int i = selectedIndex; i < nModulesSelected; i++) {
+        modulesSelected[i] = modulesSelected[i + 1];
+    }
+    modulesSelected[nModulesSelected] = "";
+}
+
+unselectAll();
+int start = dlgDialog("Replicate Layout") {
+    dlgLabel("<b>" + tr("LBL_H_ROOT") + "</b> " + sourceRootElement.name);
+    dlgLabel("<hr>" + tr("LBL_T_SOURCE"));
+    dlgLabel("<b>" + tr("LBL_H_SOURCE") + "</b>");
+    int selectedSource = nSourceModuleCandidates - 1;
+    dlgComboBox(sourceModuleCandidates, selectedSource);
+    dlgLabel("<hr>" + tr("LBL_T_TARGET"));
+
+    int selModUnsel = 0;
+    int selModSel = 0;
+
+    dlgHBoxLayout {
+        dlgVBoxLayout {
+            dlgLabel("\n<b>" + tr("LBL_H_UNSELECTED") + "</b>");
+
+            dlgListBox(modulesUnselected, selModUnsel) {
+                addToSelection(selModUnsel);
+                dlgRedisplay();
+            }
+        }
+
+        dlgVBoxLayout {
+            dlgLabel("");
+            dlgPushButton(">") {
+                if (selModUnsel >= 0 && selModUnsel < nModulesUnselected) {
+                    addToSelection(selModUnsel);
+                    dlgRedisplay();
+                }
+            }
+            dlgPushButton(">>") {
+                selectAll();
+                dlgRedisplay();
+            }
+            dlgPushButton("<") {
+                if (selModSel >= 0 && selModSel < nModulesSelected) {
+                    removeFromSelection(selModSel);
+                    dlgRedisplay();
+                }
+            }
+            dlgPushButton("<<") {
+                unselectAll();
+                dlgRedisplay();
+            }
+            dlgLabel("");
+        }
+
+        dlgVBoxLayout {
+            dlgLabel("\n<b>" + tr("LBL_H_SELECTED") + "</b>");
+
+            dlgListBox(modulesSelected, selModSel) {
+                removeFromSelection(selModSel);
+                dlgRedisplay();
+            }
+        }
+    }
+
+    dlgPushButton(tr("BTN_GO")) {
+        if (nModulesSelected > 0) {
+            sourceModuleName = sourceModuleCandidates[selectedSource];
+            dlgAccept();
+        } else {
+            dlgMessageBox(tr("ERROR_NO_TARGETS"));
+        }
+    }
+};
+if (start < 1) {
+    exit(-1);
+}
+
+// ====== PREPARE REPLICATE ====== //
+
+string targetModuleNames[];
+UL_ELEMENT targetModuleRoots[];
+int nTargets = nModulesSelected;
+
+/* Create list of selected target module names with their respective root elements.
+   We use the lookup array pair candidateModuleNames and candidateModuleRoots 
+   that we stored earlier.
+   This is mainly done to improve readability for later actions. */
+for (int i_selected = 0; i_selected < nModulesSelected; i_selected++) {
+    targetModuleNames[i_selected] = modulesSelected[i_selected];
+    for (int i_candidate = 0; i_candidate < nCandidates; i_candidate++) {
+        if (targetModuleNames[i_selected] == candidateModuleNames[i_candidate]) {
+            targetModuleRoots[i_selected] = candidateModuleRoots[i_candidate];
+        }
+    }
+}
+
+int lenSourceModuleName = strlen(sourceModuleName);
+string rootSuffix = strsub(sourceRootElement.name, lenSourceModuleName);
+
+// create list of all elements in the source module and thier names without the source module name (suffixes)
+UL_ELEMENT sourceElements[];
+string sourceElementSuffixes[];
+int nSourceElements = 0;
+
+board(B) {
+    string rootElementName = getCoreName(sourceRootElement.name);
+    B.elements(E) {
+        if (E.name != sourceRootElement.name) {   // we don't want to include the root element again
+            if (strstr(E.name, sourceModuleName) == 0) {
+                sourceElements[nSourceElements] = E;
+                sourceElementSuffixes[nSourceElements] = strsub(E.name, lenSourceModuleName);
+                nSourceElements++;
+            }
+        }
+    }
+}
+
+// find target module index of given element name
+int getTargetModuleIndex(string fullName) {
+    for (int i = 0; i < nTargets; i++) {
+        if (strstr(fullName, targetModuleNames[i]) == 0) {
+            return i;
+        }
+    }
+    return nCandidates - 1;
+}
+
+// search for equivalent element in source module
+int getMatchingSourceElement(UL_ELEMENT targetElement, string targetModuleName) {
+    string targetElementSuffix = strsub(targetElement.name, strlen(targetModuleName));
+
+    for (int i = 0; i < nSourceElements; i++) {
+        if (isElementEquivalent(sourceElements[i], targetElement, sourceElementSuffixes[i], targetElementSuffix)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+
+// ====== REPLICATE ====== //
+
+string commands = "";
+
+board(B) {
+    string rootElementName = getCoreName(sourceRootElement.name);
+    B.elements(targetElement) {
+        if (targetElement.name != sourceRootElement.name) {   // we don't want to include the root element again
+
+            // find target module for this element
+            int targetModuleIndex = getTargetModuleIndex(targetElement.name);
+            if (targetModuleIndex > -1) {
+                // get root element of this module
+                UL_ELEMENT thisRootElement = targetModuleRoots[targetModuleIndex];
+                
+                // get equivalent element in source module
+                string targetModuleName = targetModuleNames[targetModuleIndex];
+                int matchingSourceElementIndex = getMatchingSourceElement(targetElement, targetModuleName);
+                if (matchingSourceElementIndex > -1) {
+                    UL_ELEMENT sourceElement = sourceElements[matchingSourceElementIndex];
+
+                    // vector from source root to source equivalent
+                    int sourceDX = sourceElement.x - sourceRootElement.x;
+                    int sourceDY = sourceElement.y - sourceRootElement.y;
+
+                    // desired target element position
+                    int targetX = thisRootElement.x + sourceDX;
+                    int targetY = thisRootElement.y + sourceDY;
+
+                    // move
+                    if (targetX != targetElement.x || targetY != targetElement.y) {
+                        sprintf(buffer, "MOVE '%s' (%f %f);\n", targetElement.name, u2real(targetX), u2real(targetY));
+                        commands += buffer;
+                    }
+                    
+                    int thisMirror = targetElement.mirror;  // keep track of mirroring, as rotation flips the element tot the front
+
+                    // rotate 
+                    if (sourceElement.angle != targetElement.angle) {
+                        sprintf(buffer, "ROTATE =R%f '%s';\n", sourceElement.angle, targetElement.name);
+                        commands += buffer;
+                        thisMirror = 0;
+                    }
+
+                    // mirror
+                    if (sourceElement.mirror != thisMirror) {
+                        sprintf(buffer, "MIRROR '%s';\n", targetElement.name);
+                        commands += buffer;
+                    }
+                }
+            }
+        }
+    }
+}
+
+//output(printFile, "at"){printf(commands);};
+exit(commands);
