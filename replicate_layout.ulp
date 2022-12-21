@@ -64,6 +64,22 @@ string TEXTS[] = {
     "Selected target modules:\v"
     "Ausgewählte Ziel-Module:\v"
     ,
+    "LBL_H_REPLICATE_SELECTION\v"
+    "Replicate:\v"
+    "Replizieren:\v"
+    ,
+    "CHK_TRACES\v"
+    "Traces\v"
+    "Leiterbahnen\v"
+    ,
+    "CHK_POLYGONS\v"
+    "Polygons\v"
+    "Polygone\v"
+    ,
+    "CHK_TEXTS\v"
+    "Texts\v"
+    "Texte\v"
+    ,
     "BTN_GO\v"
     "Go!\v"
     "Los!\v"
@@ -98,7 +114,7 @@ string tr(string identifier)
 // convert from internal to input units
 int gridUnit;
 board(B) {
-    gridUnit = B.grid.unitdist;
+    gridUnit = B.grid.unit;
 }
 real u2real(int u) {
     switch(gridUnit) {
@@ -285,6 +301,10 @@ void removeFromSelection(int selectedIndex) {
     modulesSelected[nModulesSelected] = "";
 }
 
+int chkReplicateTraces = 1;
+int chkReplicatePolys = 1;
+int chkReplicateTexts = 1;
+
 unselectAll();
 int start = dlgDialog("Replicate Layout") {
     dlgLabel("<b>" + tr("LBL_H_ROOT") + "</b> " + sourceRootElement.name);
@@ -342,6 +362,16 @@ int start = dlgDialog("Replicate Layout") {
         }
     }
 
+    dlgLabel("<hr><b>" + tr("LBL_H_REPLICATE_SELECTION") + "</b>");
+    dlgHBoxLayout {
+        dlgCheckBox(tr("CHK_TRACES"), chkReplicateTraces);
+        dlgSpacing(10);
+        dlgCheckBox(tr("CHK_POLYGONS"), chkReplicatePolys);
+        dlgSpacing(10);
+        dlgCheckBox(tr("CHK_TEXTS"), chkReplicateTexts);
+        dlgStretch(1);
+    }
+
     dlgPushButton(tr("BTN_GO")) {
         if (nModulesSelected > 0) {
             sourceModuleName = sourceModuleCandidates[selectedSource];
@@ -359,7 +389,7 @@ if (start < 1) {
 
 string targetModuleNames[];
 UL_ELEMENT targetModuleRoots[];
-int nTargets = nModulesSelected;
+int nTargetModules = nModulesSelected;
 
 /* Create list of selected target module names with their respective root elements.
    We use the lookup array pair candidateModuleNames and candidateModuleRoots 
@@ -397,12 +427,13 @@ board(B) {
 
 // find target module index of given element name
 int getTargetModuleIndex(string fullName) {
-    for (int i = 0; i < nTargets; i++) {
+    for (int i = 0; i < nTargetModules; i++) {
         if (strstr(fullName, targetModuleNames[i]) == 0) {
+            // the name of the target module i has been found at the start of the given name (at position 0)
             return i;
         }
     }
-    return nCandidates - 1;
+    return -1;
 }
 
 // search for equivalent element in source module
@@ -418,13 +449,208 @@ int getMatchingSourceElement(UL_ELEMENT targetElement, string targetModuleName) 
     return -1;
 }
 
+/*
+// store old grid setting, as we will use the finest unit setting for replication
+real gridDistance;
+string gridUnit;
+board(B) {
+    gridDistance = B.grid.distance;
+    switch(B.grid.unit) {
+        case GRID_UNIT_MIC: 
+            gridUnit = "mic";
+            break;
+        case GRID_UNIT_MM: 
+            gridUnit = "mm";
+            break;
+        case GRID_UNIT_MIL: 
+            gridUnit = "mil";
+            break;
+        case GRID_UNIT_INCH: 
+            gridUnit = "inch";
+            break;
+        default:
+            gridUnit = "mil";
+    }
+}*/
 
 // ====== REPLICATE ====== //
 
 string commands = "";
 
+for (int targetModuleIndex = 0; targetModuleIndex < nTargetModules; targetModuleIndex++) {
+    // get root element of this module
+    UL_ELEMENT thisRootElement = targetModuleRoots[targetModuleIndex];
+
+    string targetModuleName = targetModuleNames[targetModuleIndex];
+
+    // get angle offset between source root and this root
+    real angleOffset = thisRootElement.angle - sourceRootElement.angle;
+    real sinAngleOffset = sin((angleOffset / 180.0) * PI);
+    real cosAngleOffset = cos((angleOffset / 180.0) * PI);
+
+    board(B) {
+        if (chkReplicateTraces) {
+            // ripup old traces
+            commands += "RIPUP " + targetModuleName + "*;\n";
+
+            // set wire bend mode to direct connection
+            commands += "SET WIRE_BEND 2;\n";
+        }
+
+        // position elements
+        B.elements(targetElement) {
+            if (getTargetModuleIndex(targetElement.name) == targetModuleIndex) {
+                // get equivalent element in source module
+                int matchingSourceElementIndex = getMatchingSourceElement(targetElement, targetModuleName);
+                if (matchingSourceElementIndex > -1) {
+                    
+                    UL_ELEMENT sourceElement = sourceElements[matchingSourceElementIndex];
+
+                    int targetMirror = sourceElement.mirror; 
+
+                    // vector from source root to source equivalent
+                    int sourceDX = sourceElement.x - sourceRootElement.x;
+                    int sourceDY = sourceElement.y - sourceRootElement.y;
+
+                    // desired target element position
+                    int targetX = thisRootElement.x + cosAngleOffset * sourceDX - sinAngleOffset * sourceDY;
+                    int targetY = thisRootElement.y + sinAngleOffset * sourceDX + cosAngleOffset * sourceDY;
+
+                    // move
+                    if (targetX != targetElement.x || targetY != targetElement.y) {
+                        sprintf(buffer, "MOVE '%s' (%g %g);\n", targetElement.name, u2real(targetX), u2real(targetY));
+                        commands += buffer;
+                    }
+
+                    // rotate 
+                    real targetAngle = sourceElement.angle + (targetMirror ? -angleOffset : angleOffset);
+                    if (targetAngle != targetElement.angle) {
+                        sprintf(buffer, "ROTATE =%s%g '%s';\n", targetMirror ? "MR" : "R", targetAngle, targetElement.name);
+                        commands += buffer;
+                    }
+                    else if (targetMirror != targetElement.mirror) {
+                        sprintf(buffer, "MIRROR '%s';\n", targetElement.name);
+                        commands += buffer;
+                    }
+                }
+            }
+        }
+
+        // replicate traces
+        B.signals(signal) {
+            if (strstr(signal.name, sourceModuleName) == 0) {
+                // generate target signal name
+                string signalSuffix = strsub(signal.name, lenSourceModuleName);
+                string targetSignalName = targetModuleName + signalSuffix;
+
+                if (chkReplicateTraces) {
+                    // replicate wires
+                    int currentLayer = 0;
+                    signal.wires(sourceWire) {
+                        // set layer
+                        int targetLayer = sourceWire.layer; 
+                        if (targetLayer != LAYER_UNROUTED) {
+                            if (currentLayer != targetLayer) {
+                                sprintf(buffer, "LAYER %d;\n", targetLayer);
+                                commands += buffer;
+                                currentLayer = targetLayer;
+                            }
+
+                            // vector from source root to source trace endpoints
+                            int sourceDX1 = sourceWire.x1 - sourceRootElement.x;
+                            int sourceDY1 = sourceWire.y1 - sourceRootElement.y;
+                            int sourceDX2 = sourceWire.x2 - sourceRootElement.x;
+                            int sourceDY2 = sourceWire.y2 - sourceRootElement.y;
+
+                            // desired target trace endpoints
+                            int targetX1 = thisRootElement.x + cosAngleOffset * sourceDX1 - sinAngleOffset * sourceDY1;
+                            int targetY1 = thisRootElement.y + sinAngleOffset * sourceDX1 + cosAngleOffset * sourceDY1;
+                            int targetX2 = thisRootElement.x + cosAngleOffset * sourceDX2 - sinAngleOffset * sourceDY2;
+                            int targetY2 = thisRootElement.y + sinAngleOffset * sourceDX2 + cosAngleOffset * sourceDY2;
+
+                            // curvature string
+                            string curve = "";
+                            if (sourceWire.curve) {
+                                sprintf(curve, "%+f ", sourceWire.curve);
+                            }
+
+                            // create trace
+                            sprintf(buffer, "LINE '%s' %g (%g %g) %s(%g %g);\n", 
+                                targetSignalName, 
+                                u2real(sourceWire.width), 
+                                u2real(targetX1), u2real(targetY1), 
+                                curve,
+                                u2real(targetX2), u2real(targetY2)
+                            );
+                            commands += buffer;
+                        }
+                    }
+
+                    // replicate vias
+                    int currentDrill = 0;
+                    signal.vias(sourceVia) {
+                        
+                        // set drill size
+                        if (sourceVia.drill != currentDrill) {
+                            sprintf(buffer, "SET DRILL %g;\n", u2real(sourceVia.drill));
+                            commands += buffer;
+                            currentDrill = sourceVia.drill;
+                        }
+                        
+                        // get shape
+                        string shapeStr = "";
+                        switch(sourceVia.shape[start]) {
+                            case (VIA_SHAPE_SQUARE):
+                                shapeStr = "Square";
+                                break;
+                            case (VIA_SHAPE_ROUND):
+                                shapeStr = "Round";
+                                break; 
+                            case (VIA_SHAPE_OCTAGON):
+                                shapeStr = "Octagon";
+                                break;
+                        }
+
+                        // get flags
+                        string flagString = "";
+                        if (sourceVia.flags & VIA_FLAG_STOP) {
+                            flagString += "STOP ";
+                        }
+
+                        // vector from source root to source equivalent
+                        int sourceDX = sourceVia.x - sourceRootElement.x;
+                        int sourceDY = sourceVia.y - sourceRootElement.y;
+
+                        // desired target element position
+                        int targetX = thisRootElement.x + cosAngleOffset * sourceDX - sinAngleOffset * sourceDY;
+                        int targetY = thisRootElement.y + sinAngleOffset * sourceDX + cosAngleOffset * sourceDY;
+
+                        // create via
+                        sprintf(buffer, "VIA '%s' %g %s %d-%d %s (%g %g);\n", 
+                            targetSignalName, 
+                            u2real(sourceVia.diameter[sourceVia.start]), 
+                            shapeStr,
+                            sourceVia.start, sourceVia.end,
+                            flagString,
+                            u2real(targetX), u2real(targetY)
+                        );
+                        commands += buffer;
+                    }
+                }
+            }
+        }
+
+        if (chkReplicateTraces) {
+            commands += "SET WIRE_BEND 1;\n";
+        }
+    }
+}
+
+
+
+
+/*
 board(B) {
-    string rootElementName = getCoreName(sourceRootElement.name);
     B.elements(targetElement) {
         if (targetElement.name != sourceRootElement.name) {   // we don't want to include the root element again
 
@@ -440,31 +666,36 @@ board(B) {
                 if (matchingSourceElementIndex > -1) {
                     UL_ELEMENT sourceElement = sourceElements[matchingSourceElementIndex];
 
+                    // get angle offset between source root and this root
+                    real angleOffset = thisRootElement.angle - sourceRootElement.angle;
+                    real sinAngleOffset = sin((angleOffset / 180.0) * PI);
+                    real cosAngleOffset = cos((angleOffset / 180.0) * PI);
+
+                    int targetMirror = sourceElement.mirror; 
+
                     // vector from source root to source equivalent
                     int sourceDX = sourceElement.x - sourceRootElement.x;
                     int sourceDY = sourceElement.y - sourceRootElement.y;
 
                     // desired target element position
-                    int targetX = thisRootElement.x + sourceDX;
-                    int targetY = thisRootElement.y + sourceDY;
+                    //int targetX = thisRootElement.x + sourceDX;
+                    //int targetY = thisRootElement.y + sourceDY;
+                    int targetX = thisRootElement.x + cosAngleOffset * sourceDX - sinAngleOffset * sourceDY;
+                    int targetY = thisRootElement.y + sinAngleOffset * sourceDX + cosAngleOffset * sourceDY;
 
                     // move
                     if (targetX != targetElement.x || targetY != targetElement.y) {
                         sprintf(buffer, "MOVE '%s' (%f %f);\n", targetElement.name, u2real(targetX), u2real(targetY));
                         commands += buffer;
                     }
-                    
-                    int thisMirror = targetElement.mirror;  // keep track of mirroring, as rotation flips the element tot the front
 
                     // rotate 
-                    if (sourceElement.angle != targetElement.angle) {
-                        sprintf(buffer, "ROTATE =R%f '%s';\n", sourceElement.angle, targetElement.name);
+                    real targetAngle = sourceElement.angle + (targetMirror ? -angleOffset : angleOffset);
+                    if (targetAngle != targetElement.angle) {
+                        sprintf(buffer, "ROTATE =%s%f '%s';\n", targetMirror ? "MR" : "R", targetAngle, targetElement.name);
                         commands += buffer;
-                        thisMirror = 0;
                     }
-
-                    // mirror
-                    if (sourceElement.mirror != thisMirror) {
+                    else if (targetMirror != targetElement.mirror) {
                         sprintf(buffer, "MIRROR '%s';\n", targetElement.name);
                         commands += buffer;
                     }
@@ -472,7 +703,7 @@ board(B) {
             }
         }
     }
-}
+}*/
 
-//output(printFile, "at"){printf(commands);};
+//output("F:\\Users\\Jens\\Programmierung\\ULP\\Replicate-Layout-ULP\\test.txt", "at"){printf(commands);};
 exit(commands);
