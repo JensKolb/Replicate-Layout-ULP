@@ -68,6 +68,10 @@ string TEXTS[] = {
     "Replicate:\v"
     "Replizieren:\v"
     ,
+    "CHK_DEVICES\v"
+    "Device Positions\v"
+    "Bauteilpositionen\v"
+    ,
     "CHK_TRACES\v"
     "Traces\v"
     "Leiterbahnen\v"
@@ -302,6 +306,7 @@ void removeFromSelection(int selectedIndex) {
 }
 
 int chkReplicateTraces = 1;
+int chkReplicateDevices = 1;
 int chkReplicatePolys = 1;
 int chkReplicateTexts = 1;
 
@@ -364,11 +369,13 @@ int start = dlgDialog("Replicate Layout") {
 
     dlgLabel("<hr><b>" + tr("LBL_H_REPLICATE_SELECTION") + "</b>");
     dlgHBoxLayout {
+        dlgCheckBox(tr("CHK_DEVICES"), chkReplicateDevices);
+        dlgSpacing(10);
         dlgCheckBox(tr("CHK_TRACES"), chkReplicateTraces);
-        dlgSpacing(10);
-        dlgCheckBox(tr("CHK_POLYGONS"), chkReplicatePolys);
-        dlgSpacing(10);
-        dlgCheckBox(tr("CHK_TEXTS"), chkReplicateTexts);
+        //dlgSpacing(10);
+        //dlgCheckBox(tr("CHK_POLYGONS"), chkReplicatePolys);
+        //dlgSpacing(10);
+        //dlgCheckBox(tr("CHK_TEXTS"), chkReplicateTexts);
         dlgStretch(1);
     }
 
@@ -449,29 +456,6 @@ int getMatchingSourceElement(UL_ELEMENT targetElement, string targetModuleName) 
     return -1;
 }
 
-/*
-// store old grid setting, as we will use the finest unit setting for replication
-real gridDistance;
-string gridUnit;
-board(B) {
-    gridDistance = B.grid.distance;
-    switch(B.grid.unit) {
-        case GRID_UNIT_MIC: 
-            gridUnit = "mic";
-            break;
-        case GRID_UNIT_MM: 
-            gridUnit = "mm";
-            break;
-        case GRID_UNIT_MIL: 
-            gridUnit = "mil";
-            break;
-        case GRID_UNIT_INCH: 
-            gridUnit = "inch";
-            break;
-        default:
-            gridUnit = "mil";
-    }
-}*/
 
 // ====== REPLICATE ====== //
 
@@ -498,39 +482,41 @@ for (int targetModuleIndex = 0; targetModuleIndex < nTargetModules; targetModule
         }
 
         // position elements
-        B.elements(targetElement) {
-            if (getTargetModuleIndex(targetElement.name) == targetModuleIndex) {
-                // get equivalent element in source module
-                int matchingSourceElementIndex = getMatchingSourceElement(targetElement, targetModuleName);
-                if (matchingSourceElementIndex > -1) {
-                    
-                    UL_ELEMENT sourceElement = sourceElements[matchingSourceElementIndex];
+        if (chkReplicateDevices) {
+            B.elements(targetElement) {
+                if (getTargetModuleIndex(targetElement.name) == targetModuleIndex) {
+                    // get equivalent element in source module
+                    int matchingSourceElementIndex = getMatchingSourceElement(targetElement, targetModuleName);
+                    if (matchingSourceElementIndex > -1) {
+                        
+                        UL_ELEMENT sourceElement = sourceElements[matchingSourceElementIndex];
 
-                    int targetMirror = sourceElement.mirror; 
+                        int targetMirror = sourceElement.mirror; 
 
-                    // vector from source root to source equivalent
-                    int sourceDX = sourceElement.x - sourceRootElement.x;
-                    int sourceDY = sourceElement.y - sourceRootElement.y;
+                        // vector from source root to source equivalent
+                        int sourceDX = sourceElement.x - sourceRootElement.x;
+                        int sourceDY = sourceElement.y - sourceRootElement.y;
 
-                    // desired target element position
-                    int targetX = thisRootElement.x + cosAngleOffset * sourceDX - sinAngleOffset * sourceDY;
-                    int targetY = thisRootElement.y + sinAngleOffset * sourceDX + cosAngleOffset * sourceDY;
+                        // desired target element position
+                        int targetX = thisRootElement.x + cosAngleOffset * sourceDX - sinAngleOffset * sourceDY;
+                        int targetY = thisRootElement.y + sinAngleOffset * sourceDX + cosAngleOffset * sourceDY;
 
-                    // move
-                    if (targetX != targetElement.x || targetY != targetElement.y) {
-                        sprintf(buffer, "MOVE '%s' (%g %g);\n", targetElement.name, u2real(targetX), u2real(targetY));
-                        commands += buffer;
-                    }
+                        // move
+                        if (targetX != targetElement.x || targetY != targetElement.y) {
+                            sprintf(buffer, "MOVE '%s' (%g %g);\n", targetElement.name, u2real(targetX), u2real(targetY));
+                            commands += buffer;
+                        }
 
-                    // rotate 
-                    real targetAngle = sourceElement.angle + (targetMirror ? -angleOffset : angleOffset);
-                    if (targetAngle != targetElement.angle) {
-                        sprintf(buffer, "ROTATE =%s%g '%s';\n", targetMirror ? "MR" : "R", targetAngle, targetElement.name);
-                        commands += buffer;
-                    }
-                    else if (targetMirror != targetElement.mirror) {
-                        sprintf(buffer, "MIRROR '%s';\n", targetElement.name);
-                        commands += buffer;
+                        // rotate 
+                        real targetAngle = sourceElement.angle + (targetMirror ? -angleOffset : angleOffset);
+                        if (targetAngle != targetElement.angle) {
+                            sprintf(buffer, "ROTATE =%s%g '%s';\n", targetMirror ? "MR" : "R", targetAngle, targetElement.name);
+                            commands += buffer;
+                        }
+                        else if (targetMirror != targetElement.mirror) {
+                            sprintf(buffer, "MIRROR '%s';\n", targetElement.name);
+                            commands += buffer;
+                        }
                     }
                 }
             }
@@ -647,63 +633,5 @@ for (int targetModuleIndex = 0; targetModuleIndex < nTargetModules; targetModule
 }
 
 
-
-
-/*
-board(B) {
-    B.elements(targetElement) {
-        if (targetElement.name != sourceRootElement.name) {   // we don't want to include the root element again
-
-            // find target module for this element
-            int targetModuleIndex = getTargetModuleIndex(targetElement.name);
-            if (targetModuleIndex > -1) {
-                // get root element of this module
-                UL_ELEMENT thisRootElement = targetModuleRoots[targetModuleIndex];
-                
-                // get equivalent element in source module
-                string targetModuleName = targetModuleNames[targetModuleIndex];
-                int matchingSourceElementIndex = getMatchingSourceElement(targetElement, targetModuleName);
-                if (matchingSourceElementIndex > -1) {
-                    UL_ELEMENT sourceElement = sourceElements[matchingSourceElementIndex];
-
-                    // get angle offset between source root and this root
-                    real angleOffset = thisRootElement.angle - sourceRootElement.angle;
-                    real sinAngleOffset = sin((angleOffset / 180.0) * PI);
-                    real cosAngleOffset = cos((angleOffset / 180.0) * PI);
-
-                    int targetMirror = sourceElement.mirror; 
-
-                    // vector from source root to source equivalent
-                    int sourceDX = sourceElement.x - sourceRootElement.x;
-                    int sourceDY = sourceElement.y - sourceRootElement.y;
-
-                    // desired target element position
-                    //int targetX = thisRootElement.x + sourceDX;
-                    //int targetY = thisRootElement.y + sourceDY;
-                    int targetX = thisRootElement.x + cosAngleOffset * sourceDX - sinAngleOffset * sourceDY;
-                    int targetY = thisRootElement.y + sinAngleOffset * sourceDX + cosAngleOffset * sourceDY;
-
-                    // move
-                    if (targetX != targetElement.x || targetY != targetElement.y) {
-                        sprintf(buffer, "MOVE '%s' (%f %f);\n", targetElement.name, u2real(targetX), u2real(targetY));
-                        commands += buffer;
-                    }
-
-                    // rotate 
-                    real targetAngle = sourceElement.angle + (targetMirror ? -angleOffset : angleOffset);
-                    if (targetAngle != targetElement.angle) {
-                        sprintf(buffer, "ROTATE =%s%f '%s';\n", targetMirror ? "MR" : "R", targetAngle, targetElement.name);
-                        commands += buffer;
-                    }
-                    else if (targetMirror != targetElement.mirror) {
-                        sprintf(buffer, "MIRROR '%s';\n", targetElement.name);
-                        commands += buffer;
-                    }
-                }
-            }
-        }
-    }
-}*/
-
-//output("F:\\Users\\Jens\\Programmierung\\ULP\\Replicate-Layout-ULP\\test.txt", "at"){printf(commands);};
+//output(printFile, "at"){printf(commands);};
 exit(commands);
